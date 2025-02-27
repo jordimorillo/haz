@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+import os
+import sys
+import re
+import json
+import requests
+
+if "OPENAI_API_KEY" not in os.environ:
+    print("ERROR: La variable de entorno OPENAI_API_KEY no está configurada.")
+    sys.exit(1)
+
+# Pedir archivo objetivo opcional
+file_path = input("Introduce la ruta del archivo objetivo (o presiona Enter para omitir): ")
+if file_path.strip() and not os.path.isfile(file_path):
+    print("ERROR: El archivo especificado no existe.")
+    sys.exit(1)
+
+# Leer el prompt de acción desde los argumentos de línea de comandos
+# Todo lo que vaya después de 'haz' se usa como prompt.
+if len(sys.argv) > 1:
+    user_prompt = " ".join(sys.argv[1:])
+else:
+    # Si no se pasó nada tras 'haz', pedimos prompt interactivo
+    user_prompt = input("Describe la acción que deseas realizar en el sistema: ")
+
+if not user_prompt.strip():
+    print("ERROR: No se ha ingresado ninguna acción.")
+    sys.exit(1)
+
+# Combinar prompt con el archivo opcional
+if file_path.strip():
+    prompt_text = f"{user_prompt} sobre el archivo {file_path}"
+else:
+    prompt_text = user_prompt
+
+# Construir cuerpo de la solicitud a OpenAI
+body = {
+    "model": "gpt-4o-mini",
+    "messages": [
+        {
+            "role": "system",
+            "content": "Eres un asistente experto en terminal de Linux. Responde con comandos shell para cumplir la solicitud dada. Devuelve solo los comandos, sin explicaciones."
+        },
+        {
+            "role": "user",
+            "content": prompt_text
+        }
+    ],
+    "temperature": 0
+}
+
+try:
+    resp = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+            "Content-Type": "application/json"
+        },
+        json=body
+    )
+    raw_response = resp.text
+except:
+    print("ERROR: No se recibió ninguna respuesta de OpenAI.")
+    sys.exit(1)
+
+if not raw_response.strip():
+    print("ERROR: No se recibió ninguna respuesta de OpenAI.")
+    sys.exit(1)
+
+# Limpiar caracteres de control
+clean_response = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F]', '', raw_response)
+
+# Intentar parsear como JSON
+try:
+    parsed = json.loads(clean_response)
+except:
+    print("ERROR: Respuesta no es JSON válido.")
+    sys.exit(1)
+
+if not parsed.get("choices") or not parsed["choices"][0]["message"].get("content"):
+    print("ERROR: No se recibió una respuesta válida de OpenAI.")
+    print(clean_response)
+    sys.exit(1)
+
+raw_content = parsed["choices"][0]["message"]["content"].replace('\r','')
+if not raw_content.strip():
+    print("ERROR: No se recibió una respuesta válida de OpenAI.")
+    print(clean_response)
+    sys.exit(1)
+
+# Eliminar "```", "```bash" y lineas vacias
+lines = raw_content.split("\n")
+clean_lines = [line for line in lines if not line.strip().startswith("```")]
+commands = "\n".join(clean_lines).strip()
+
+# Determinar si es código
+if commands:
+    # Heurística sencilla para detectar si los primeros caracteres parecen comando
+    if re.match(r'^(ls|rm|cd|sudo|\.|\w|[a-zA-Z0-9_-]+)', commands):
+        print("Se han generado los siguientes comandos para ejecutar en la terminal:\n")
+        for line in commands.split("\n"):
+            print(f"  > {line}")
+        ans = input("\n¿Quieres ejecutar estos comandos? (s/n) ").lower()
+        if ans == "s":
+            os.system(commands)
+            print("\nComandos ejecutados exitosamente.")
+        else:
+            print("\nOperación cancelada.")
+    else:
+        print("Respuesta de la IA:\n")
+        print("\n".join(commands.split("\n")))
+else:
+    print("Respuesta de la IA:\n")
+    print(raw_content.strip())
